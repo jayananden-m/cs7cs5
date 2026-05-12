@@ -1,0 +1,42 @@
+<routes>
+  <vType 
+    id="leader_hdv"
+    accel="2.0"
+    decel="4.5"
+    sigma="0.7"
+    length="5.0"
+    minGap="2.5"
+    maxSpeed="30.0"
+    speedFactor="1.0"
+    speedDev="0.0"
+    />
+
+  <vType
+    id="agent_cav"
+    accel="2.0"
+    decel="4.5"
+    sigma="0.7"
+    length="5.0"
+    minGap="2.5"
+    maxSpeed="30.0"
+    speedFactor="1.0"
+    speedDev="0.0"
+    />
+
+  <!-- <vType id="agent_cav2"  accel="2.0" decel="4.5" sigma="0.0" length="5.0" minGap="2.5" maxSpeed="30.0"/> -->
+
+  <route id="r0" edges="e0"/>
+
+  <!-- ONLY FOR PPO -->
+  <!-- <vehicle id="leader0" type="leader_hdv" route="r0" depart="0" departPos="50"/> -->
+  <!-- <vehicle id="agent0"  type="agent_cav"  route="r0" depart="1.0" /> -->
+
+
+  <!-- Single Platoon: 1 Leader (HDV) + 5 Agents (CAV) -->
+  <vehicle id="leader0" type="leader_hdv" route="r0" depart="0" departPos="100"/>
+  <vehicle id="agent0"  type="agent_cav"  route="r0" depart="0" departPos="90"/>
+  <vehicle id="agent1"  type="agent_cav"  route="r0" depart="0" departPos="80"/>
+  <vehicle id="agent2"  type="agent_cav"  route="r0" depart="0" departPos="70"/>
+  <vehicle id="agent3"  type="agent_cav"  route="r0" depart="0" departPos="60"/>
+  <vehicle id="agent4"  type="agent_cav"  route="r0" depart="0" departPos="50"/>
+</routes>

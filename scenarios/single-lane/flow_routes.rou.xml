@@ -1,0 +1,11 @@
+<routes>
+  <!-- Vehicle type: human-driven -->
+  <vType id="hdv" accel="2.0" decel="4.5" sigma="0.5" length="5.0" minGap="2.5" maxSpeed="33.0"/>
+
+  <!-- Continuous flow along e0 -->
+  <route id="r0" edges="e0"/>
+
+  <!-- Generate one vehicle every 1.2 seconds for 600s -->
+  <flow id="flow0" type="hdv" route="r0" begin="0" end="600" period="1.2"/>
+  
+</routes>

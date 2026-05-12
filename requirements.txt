@@ -1,0 +1,7 @@
+torch
+numpy
+traci
+sumolib
+tensorboard
+plotly
+kaleido
