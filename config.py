@@ -37,20 +37,16 @@ RUNAWAY_GAP = 200.0 # lost platoon threshold (m)
 LEADER_N_EVENTS = 3 # braking disturbance events per episode
 
 
-# Reward weights (Chen et al. 2023)
+# Reward weights — Chen et al. (2023), arXiv:2308.02345 (exact values from paper)
 # r = -W_SPACING*(e_gap/GAP_NORM)^2 - W_VELOCITY*(Δv/RELV_NORM)^2
 #     -W_ACCEL*(a/A_MAX)^2 - W_SAFETY*ReLU(2*SAFETY_GAP - gap)^2
-
-# NOTE: raising W_SPACING beyond ~10 without reducing RUNAWAY_GAP causes
-#       critic divergence — squared errors grow as (gap/GAP_NORM)^2 and at
-#       200 m the penalty becomes ~3.24 × W_SPACING per step.
-
-# Reward Weights
-W_SPACING = 10.0
-W_VELOCITY = 5.0
-W_ACCEL = 0.5
-W_SAFETY = 50.0
-SAFETY_GAP = 5.0 # penalty triggers when gap < 2 * SAFETY_GAP (10m)
+# Value normalisation in the critic (Yu et al. 2022) prevents divergence
+# regardless of raw reward scale, so original paper weights can be used directly.
+W_SPACING = 1.0
+W_VELOCITY = 1.0
+W_ACCEL = 0.1
+W_SAFETY = 5.0
+SAFETY_GAP = 5.0  # penalty triggers when gap < 2 * SAFETY_GAP (10m)
 
 # Terminal penalties
 W_COLLISION = 1000.0

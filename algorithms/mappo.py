@@ -134,6 +134,50 @@ class RolloutBuffer:
             }
 
 
+class ValueNorm(nn.Module):
+    """Running mean/variance normaliser for critic targets.
+
+    Critic learns to predict normalised returns; GAE bootstrap values are
+    denormalised back to raw reward space before advantage computation.
+
+    Reference: Yu et al. (2022), "The Surprising Effectiveness of PPO in
+    Cooperative Multi-Agent Games", NeurIPS 2022.
+    """
+
+    def __init__(self, eps = 1e-5, clip_max = 10.0):
+        super().__init__()
+        self.eps = eps
+        self.clip_max = clip_max
+        self.register_buffer("running_mean", torch.zeros(1))
+        self.register_buffer("running_var", torch.ones(1))
+        self.register_buffer("count", torch.tensor(1e-4))
+
+    @torch.no_grad()
+    def update(self, x):
+        x = x.reshape(-1)
+        batch_mean = x.mean()
+        batch_var = x.var(unbiased=False)
+        batch_count = float(x.numel())
+        delta = batch_mean - self.running_mean
+        total_count = self.count + batch_count
+        new_mean = self.running_mean + delta * batch_count / total_count
+        m2 = (self.running_var * self.count
+              + batch_var * batch_count
+              + delta ** 2 * self.count * batch_count / total_count)
+        self.running_mean.copy_(new_mean)
+        self.running_var.copy_(m2 / total_count)
+        self.count.copy_(total_count)
+
+    def normalize(self, x):
+        return torch.clamp(
+            (x - self.running_mean) / (self.running_var.sqrt() + self.eps),
+            -self.clip_max, self.clip_max,
+        )
+
+    def denormalize(self, x):
+        return x * (self.running_var.sqrt() + self.eps) + self.running_mean
+
+
 # MAPPO Trainer
 class MAPPO:
     def __init__(self, env, actor_class=Actor, critic_class=Critic,
@@ -142,13 +186,14 @@ class MAPPO:
         self.actor = actor_class()
         self.critic = critic_class()
         self.buffer = RolloutBuffer()
+        self.value_norm = ValueNorm()
         self.ppo_epochs = ppo_epochs
         self.clip_eps = clip_eps
 
         self.actor_optim = torch.optim.Adam(self.actor.parameters(), lr=cfg.LR_ACTOR)
         self.critic_optim = torch.optim.Adam(self.critic.parameters(), lr=cfg.LR_CRITIC)
 
-    
+
     @torch.no_grad()
     def collect_rollout(self):
         self.buffer.clear()
@@ -160,10 +205,13 @@ class MAPPO:
             go_t = torch.tensor(global_obs, dtype=torch.float32)
 
             actions, log_probs = self.actor(lo_t)
-            values = self.critic(go_t.unsqueeze(0)).expand(cfg.N_AGENTS, 1)
+            # Critic predicts normalised values; denormalise for GAE
+            values_norm = self.critic(go_t.unsqueeze(0)).expand(cfg.N_AGENTS, 1)
+            values_raw = self.value_norm.denormalize(values_norm)
 
             next_lo, next_go, rewards, done, info = self.env.step(actions.numpy().flatten())
-            self.buffer.push(local_obs, global_obs, actions.numpy(), log_probs.numpy(), rewards, values.numpy(), done)
+            self.buffer.push(local_obs, global_obs, actions.numpy(), log_probs.numpy(),
+                             rewards, values_raw.numpy(), done)
 
             ep_reward += rewards.sum()
             ep_steps += 1
@@ -171,11 +219,13 @@ class MAPPO:
 
             if done:
                 break
+
         if done:
             last_vals = np.zeros((cfg.N_AGENTS, 1), dtype=np.float32)
         else:
             go_t = torch.tensor(global_obs, dtype=torch.float32)
-            last_vals = self.critic(go_t.unsqueeze(0)).expand(cfg.N_AGENTS, 1).numpy()
+            last_vals_norm = self.critic(go_t.unsqueeze(0)).expand(cfg.N_AGENTS, 1)
+            last_vals = self.value_norm.denormalize(last_vals_norm).numpy()
 
         self.buffer.compute_gae(last_vals)
         return {
@@ -183,10 +233,14 @@ class MAPPO:
             "ep_steps": ep_steps,
             "reason": info.get("reason", "")
         }
-    
-    
+
+
     def update(self):
         """Run PPO_EPOCHS of minibatch updates. Returns averaged losses."""
+        # Update normaliser once per episode before the training loop
+        all_returns = torch.tensor(self.buffer._returns.reshape(-1, 1))
+        self.value_norm.update(all_returns)
+
         total_actor_loss = total_critic_loss = n = 0
         for _ in range(self.ppo_epochs):
             for batch in self.buffer.get_batches(cfg.BATCH_SIZE):
@@ -207,7 +261,9 @@ class MAPPO:
                 nn.utils.clip_grad_norm_(self.actor.parameters(), cfg.MAX_GRAD_NORM)
                 self.actor_optim.step()
 
-                c_loss = cfg.VALUE_COEF * nn.functional.mse_loss(self.critic(go), ret)
+                # Normalise returns so critic loss stays bounded
+                ret_norm = self.value_norm.normalize(ret)
+                c_loss = cfg.VALUE_COEF * nn.functional.mse_loss(self.critic(go), ret_norm)
                 self.critic_optim.zero_grad()
                 c_loss.backward()
                 nn.utils.clip_grad_norm_(self.critic.parameters(), cfg.MAX_GRAD_NORM)
@@ -221,15 +277,18 @@ class MAPPO:
             "critic_loss": total_critic_loss / max(n, 1)
         }
 
-    
+
     def save(self, path):
         torch.save({
             "actor": self.actor.state_dict(),
-            "critic": self.critic.state_dict()
+            "critic": self.critic.state_dict(),
+            "value_norm": self.value_norm.state_dict(),
         }, path)
 
-    
+
     def load(self, path):
         ckpt = torch.load(path, weights_only=True)
         self.actor.load_state_dict(ckpt['actor'])
         self.critic.load_state_dict(ckpt['critic'])
+        if "value_norm" in ckpt:
+            self.value_norm.load_state_dict(ckpt['value_norm'])
