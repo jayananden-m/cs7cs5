@@ -44,26 +44,32 @@ def load_eval_csv(agent_name) -> list[dict]:
 
 
 def load_trajectory_csv(agent_name):
-    # Returns (T, N) arrays for gaps, desired, rel_vs
+    # Returns (T, N) arrays for gaps, desired, rel_vs, speeds (speeds=None if not in CSV)
     path = os.path.join(DATA_DIR, f"{agent_name}_trajectory.csv")
     if not os.path.exists(path):
-        return None, None, None
+        return None, None, None, None
     with open(path) as f:
         rows = list(csv.DictReader(f))
     if not rows:
-        return None, None, None
+        return None, None, None, None
 
     n_agents = sum(1 for k in rows[0] if k.startswith("agent") and k.endswith("_gap"))
     T = len(rows)
-    gaps = np.zeros((T, n_agents), dtype=np.float32)
+    has_speed = f"agent0_speed" in rows[0]
+
+    gaps    = np.zeros((T, n_agents), dtype=np.float32)
     desired = np.zeros((T, n_agents), dtype=np.float32)
-    relvs = np.zeros((T, n_agents), dtype=np.float32)
+    relvs   = np.zeros((T, n_agents), dtype=np.float32)
+    speeds  = np.zeros((T, n_agents), dtype=np.float32) if has_speed else None
+
     for t, row in enumerate(rows):
         for i in range(n_agents):
-            gaps[t, i] = float(row[f"agent{i}_gap"])
+            gaps[t, i]    = float(row[f"agent{i}_gap"])
             desired[t, i] = float(row[f"agent{i}_desired"])
-            relvs[t, i] = float(row[f"agent{i}_relv"])
-    return gaps, desired, relvs
+            relvs[t, i]   = float(row[f"agent{i}_relv"])
+            if has_speed:
+                speeds[t, i] = float(row[f"agent{i}_speed"])
+    return gaps, desired, relvs, speeds
 
 
 def load_attention_csv(agent_name):
@@ -173,7 +179,7 @@ def fig3_gap_trajectory(agents):
     # Each subplot shows per-vehicle gap and desired gap line.
 
     valid = [(name, *load_trajectory_csv(name)) for name in agents]
-    valid = [(name, g, d, r) for name, g, d, r in valid if g is not None]
+    valid = [(name, g, d, r, s) for name, g, d, r, s in valid if g is not None]
     if not valid:
         print("  [skip] no trajectory CSVs found")
         return
@@ -182,7 +188,7 @@ def fig3_gap_trajectory(agents):
     titles = [AGENT_LABELS.get(name, name) for name, *_ in valid]
     fig = make_subplots(rows=1, cols=n_cols, subplot_titles=titles, horizontal_spacing=0.12)
 
-    for col, (name, gaps, desired, _) in enumerate(valid, start=1):
+    for col, (name, gaps, desired, _, _s) in enumerate(valid, start=1):
         T, N = gaps.shape
         steps = np.arange(T)
         for i in range(N):
@@ -216,7 +222,7 @@ def fig3_gap_trajectory(agents):
 def fig4_relv_trajectory(agents):
     # Relative velocity trajectory (string stability indicator)
     valid = [(name, *load_trajectory_csv(name)) for name in agents]
-    valid = [(name, g, d, r) for name, g, d, r in valid if g is not None]
+    valid = [(name, g, d, r, s) for name, g, d, r, s in valid if g is not None]
     if not valid:
         print("  [skip] no trajectory CSVs found")
         return
@@ -225,7 +231,7 @@ def fig4_relv_trajectory(agents):
     titles = [AGENT_LABELS.get(name, name) for name, *_ in valid]
     fig = make_subplots(rows=1, cols=n_cols, subplot_titles=titles, horizontal_spacing=0.12)
 
-    for col, (name, _, _, relvs) in enumerate(valid, start=1):
+    for col, (name, _, _, relvs, _s) in enumerate(valid, start=1):
         T, N = relvs.shape
         steps = np.arange(T)
         for i in range(N):
@@ -316,7 +322,7 @@ def fig6_string_stability(agents):
     pair_labels = None
 
     for name in agents:
-        _, _, relvs = load_trajectory_csv(name)
+        _, _, relvs, _ = load_trajectory_csv(name)
         if relvs is None:
             print(f"  [skip] no trajectory CSV for {name}")
             continue
@@ -371,7 +377,7 @@ def fig7_attention_gap_correlation(agent_name = "attention_mappo"):
         plotted on dual y-axes over time. Tests whether the attention mechanism responds to spacing errors,
         meaning, if w0 spikes when gap error is large, the weights are faithful control relevant signals
     """
-    gaps, desired, _ = load_trajectory_csv(agent_name)
+    gaps, desired, _, _ = load_trajectory_csv(agent_name)
     attn = load_attention_csv(agent_name)
 
     if gaps is None or attn is None:
@@ -424,6 +430,46 @@ def fig7_attention_gap_correlation(agent_name = "attention_mappo"):
     _save(fig, "fig7_attention_gap_correlation.png")
 
 
+def fig8_speed_profile(agents):
+    """Per-vehicle speed over time for each model side by side.
+
+    Shows how the braking disturbance propagates (or attenuates) through
+    the platoon as an absolute speed wave — complements fig4 (relative velocity).
+    """
+    valid = [(name, *load_trajectory_csv(name)) for name in agents]
+    valid = [(name, g, d, r, s) for name, g, d, r, s in valid if s is not None]
+    if not valid:
+        print("  [skip] no speed data in trajectory CSVs")
+        return
+
+    n_cols = len(valid)
+    titles = [AGENT_LABELS.get(name, name) for name, *_ in valid]
+    fig = make_subplots(rows=1, cols=n_cols, subplot_titles=titles, horizontal_spacing=0.12)
+
+    for col, (name, _, _, _, speeds) in enumerate(valid, start=1):
+        T, N = speeds.shape
+        steps = np.arange(T)
+        for i in range(N):
+            fig.add_trace(go.Scatter(
+                x=steps, y=speeds[:, i].tolist(),
+                name=f"Agent {i+1}",
+                line=dict(color=AGENT_LINE_COLORS[i % len(AGENT_LINE_COLORS)], width=1.5),
+                showlegend=(col == 1),
+            ), row=1, col=col)
+
+        fig.update_xaxes(title_text="Step", row=1, col=col)
+        fig.update_yaxes(title_text="Speed (m/s)", row=1, col=1)
+
+    fig.update_layout(
+        title="Best-Episode Speed Profile (disturbance propagation)",
+        template="plotly_white",
+        height=450, width=1000,
+        legend=dict(x=1.02, y=1, xanchor="left", yanchor="top"),
+        margin=dict(r=160),
+    )
+    _save(fig, "fig8_speed_profile.png")
+
+
 # Helpers
 def _save(fig, filename):
     os.makedirs(FIGURES_DIR, exist_ok=True)
@@ -448,4 +494,5 @@ if __name__ == "__main__":
         fig6_string_stability(agents)
         if "attention_mappo" in agents:
             fig7_attention_gap_correlation("attention_mappo")
+        fig8_speed_profile(agents)
         print("Done")
